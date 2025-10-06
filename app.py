@@ -3,12 +3,13 @@
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-from flask import Flask, render_template, request, session, make_response
+from flask import Flask, render_template, request, make_response
 from io import BytesIO
 import os
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
+
+# --- Helper Functions ---
 
 def authenticate_gsheets():
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -29,6 +30,40 @@ def to_excel_in_memory(df):
     output.seek(0)
     return output
 
+# --- Core Assessment Logic (as a reusable function) ---
+
+def run_assessment_logic(df_nomination, df_inventory):
+    processed_rows = []
+    for index, nom_row in df_nomination.iterrows():
+        pla_id = nom_row['PLA ID']
+        matches = df_inventory[df_inventory['PLA ID'] == pla_id]
+        selected_inventory_row = matches.iloc[0] if not matches.empty else pd.Series(dtype=object)
+        combined_row = pd.concat([nom_row, selected_inventory_row.add_prefix('Inv_')])
+        processed_rows.append(combined_row)
+    df = pd.DataFrame(processed_rows)
+
+    numeric_cols = ['GE Port Demand', '10GE Port Demand', 'Inv_GE_1G', 'Inv_GE_10G', 'Inv_MYCOM LOOP NORMAL UTILIZATION']
+    if 'Inv_MYCOM LOOP NORMAL UTILIZATION' in df and df['Inv_MYCOM LOOP NORMAL UTILIZATION'].dtype == 'object':
+        df['Inv_MYCOM LOOP NORMAL UTILIZATION'] = df['Inv_MYCOM LOOP NORMAL UTILIZATION'].str.replace('%', '', regex=False).astype(float) / 100
+    for col in numeric_cols:
+        if col in df:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    def get_node_assessment(row):
+        failures = []
+        if row.get('GE Port Demand', 0) >= 1 and (row.get('Inv_GE_1G', 0) - row.get('GE Port Demand', 0)) <= 2: failures.append("Requires Port Augmentation")
+        if row.get('10GE Port Demand', 0) >= 1 and (row.get('Inv_GE_10G', 0) - row.get('10GE Port Demand', 0)) <= 2: failures.append("Requires Port Augmentation")
+        return " & ".join(failures) if failures else ("With Headroom" if row.get('GE Port Demand', 0) >= 1 or row.get('10GE Port Demand', 0) >= 1 else "No Port Demand")
+
+    def get_loop_assessment(row):
+        return "Requires Loop Upgrade" if row.get('Inv_MYCOM LOOP NORMAL UTILIZATION', 0) >= 0.7 else "With Headroom"
+
+    df['Node Assessment'] = df.apply(get_node_assessment, axis=1)
+    df['Loop Assessment'] = df.apply(get_loop_assessment, axis=1)
+    return df
+
+# --- Data Loading (runs once on startup) ---
+
 print("Loading master inventory data...")
 try:
     gsheet_client = authenticate_gsheets()
@@ -40,76 +75,48 @@ except Exception as e:
     print(f"CRITICAL: Failed to load master inventory data. Error: {e}")
     df_inventory = pd.DataFrame()
 
+# --- Web Routes ---
+
 @app.route('/', methods=['GET'])
 def index():
     return render_template('index.html')
 
-@app.route('/assess', methods=['POST'])
-def assess():
+@app.route('/assess_and_display', methods=['POST'])
+def assess_and_display():
     nomination_url = request.form.get('nomination_url')
     if not nomination_url:
         return render_template('index.html', error="Nomination URL is required.")
     try:
         csv_url = get_google_sheet_csv_url(nomination_url)
-        if not csv_url:
-            return render_template('index.html', error="Invalid Google Sheet URL format.")
         df_nomination = pd.read_csv(csv_url)
-
-        processed_rows = []
-        for index, nom_row in df_nomination.iterrows():
-            pla_id = nom_row['PLA ID']
-            matches = df_inventory[df_inventory['PLA ID'] == pla_id]
-            selected_inventory_row = matches.iloc[0] if not matches.empty else pd.Series(dtype=object)
-            combined_row = pd.concat([nom_row, selected_inventory_row.add_prefix('Inv_')])
-            processed_rows.append(combined_row)
-        df = pd.DataFrame(processed_rows)
-
-        numeric_cols = ['GE Port Demand', '10GE Port Demand', 'Inv_GE_1G', 'Inv_GE_10G', 'Inv_MYCOM LOOP NORMAL UTILIZATION']
-        if 'Inv_MYCOM LOOP NORMAL UTILIZATION' in df and df['Inv_MYCOM LOOP NORMAL UTILIZATION'].dtype == 'object':
-            df['Inv_MYCOM LOOP NORMAL UTILIZATION'] = df['Inv_MYCOM LOOP NORMAL UTILIZATION'].str.replace('%', '', regex=False).astype(float) / 100
-        for col in numeric_cols:
-            if col in df:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-
-        def get_node_assessment(row):
-            failures = []
-            if row.get('GE Port Demand', 0) >= 1 and (row.get('Inv_GE_1G', 0) - row.get('GE Port Demand', 0)) <= 2: failures.append("Requires Port Augmentation")
-            if row.get('10GE Port Demand', 0) >= 1 and (row.get('Inv_GE_10G', 0) - row.get('10GE Port Demand', 0)) <= 2: failures.append("Requires Port Augmentation")
-            return " & ".join(failures) if failures else ("With Headroom" if row.get('GE Port Demand', 0) >= 1 or row.get('10GE Port Demand', 0) >= 1 else "No Port Demand")
-
-        def get_loop_assessment(row):
-            return "Requires Loop Upgrade" if row.get('Inv_MYCOM LOOP NORMAL UTILIZATION', 0) >= 0.7 else "With Headroom"
-
-        df['Node Assessment'] = df.apply(get_node_assessment, axis=1)
-        df['Loop Assessment'] = df.apply(get_loop_assessment, axis=1)
-        
-        session['assessment_result'] = df.to_json()
-        
-        # --- THIS IS THE CHANGED LINE ---
-        # Added the new 'results-table' class to apply the CSS
-        return render_template('index.html', results_table=df.to_html(classes='table table-bordered table-hover results-table', index=False))
-
+        df_result = run_assessment_logic(df_nomination, df_inventory)
+        return render_template('index.html', results_table=df_result.to_html(classes='table table-bordered table-hover results-table', index=False))
     except Exception as e:
         return render_template('index.html', error=f"An error occurred: {e}")
+
+@app.route('/assess_and_download', methods=['POST'])
+def assess_and_download():
+    nomination_url = request.form.get('nomination_url')
+    if not nomination_url:
+        return "Nomination URL is required.", 400
+    try:
+        csv_url = get_google_sheet_csv_url(nomination_url)
+        df_nomination = pd.read_csv(csv_url)
+        df_result = run_assessment_logic(df_nomination, df_inventory)
+        
+        excel_data = to_excel_in_memory(df_result)
+        response = make_response(excel_data)
+        response.headers['Content-Disposition'] = 'attachment; filename=Final_Assessment.xlsx'
+        response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        return response
+    except Exception as e:
+        return f"An error occurred: {e}", 500
 
 @app.route('/download_master')
 def download_master():
     excel_data = to_excel_in_memory(df_inventory)
     response = make_response(excel_data)
     response.headers['Content-Disposition'] = 'attachment; filename=Service_Inventory_Data.xlsx'
-    response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    return response
-
-@app.route('/download_assessment')
-def download_assessment():
-    result_json = session.get('assessment_result', None)
-    if result_json is None:
-        return "No assessment result found to download.", 404
-        
-    df_result = pd.read_json(result_json)
-    excel_data = to_excel_in_memory(df_result)
-    response = make_response(excel_data)
-    response.headers['Content-Disposition'] = 'attachment; filename=Final_Assessment.xlsx'
     response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     return response
 
