@@ -2,5 +2,5 @@ pandas
 openpyxl
 gspread
 google-auth-oauthlib
-fastapi
-uvicorn[standard]
+flask
+gunicorn
