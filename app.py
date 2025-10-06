@@ -8,7 +8,6 @@ from io import BytesIO
 import os
 
 app = Flask(__name__)
-# A secret key is required to store results in the session
 app.secret_key = os.urandom(24)
 
 def authenticate_gsheets():
@@ -84,11 +83,11 @@ def assess():
         df['Node Assessment'] = df.apply(get_node_assessment, axis=1)
         df['Loop Assessment'] = df.apply(get_loop_assessment, axis=1)
         
-        # Store result in session to be available for download
         session['assessment_result'] = df.to_json()
         
-        # Render the page again, this time with the results table
-        return render_template('index.html', results_table=df.to_html(classes='table table-bordered table-hover', index=False))
+        # --- THIS IS THE CHANGED LINE ---
+        # Added the new 'results-table' class to apply the CSS
+        return render_template('index.html', results_table=df.to_html(classes='table table-bordered table-hover results-table', index=False))
 
     except Exception as e:
         return render_template('index.html', error=f"An error occurred: {e}")
@@ -103,7 +102,6 @@ def download_master():
 
 @app.route('/download_assessment')
 def download_assessment():
-    """Serves the last assessment result as an Excel file."""
     result_json = session.get('assessment_result', None)
     if result_json is None:
         return "No assessment result found to download.", 404
