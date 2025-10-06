@@ -18,16 +18,19 @@ def to_excel(df):
     processed_data = output.getvalue()
     return processed_data
 
+# Authenticate with Google Sheets using a secret file (for Render)
 def authenticate_gsheets():
-    """Uses st.secrets to authenticate and return a gspread client."""
+    """Uses a service account file to authenticate and return a gspread client."""
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
-    creds = Credentials.from_service_account_info(
-        st.secrets["google_credentials"], scopes=scopes
+    # This line reads credentials from the secret file you create on Render
+    creds = Credentials.from_service_account_file(
+        "google_credentials.json", scopes=scopes
     )
     return gspread.authorize(creds)
+
 
 def get_google_sheet_csv_url(url):
     """Transforms a public Google Sheet URL into a direct CSV export link."""
@@ -56,14 +59,14 @@ def load_master_inventory_data():
         df_inventory = pd.DataFrame(worksheet.get_all_records())
         return df_inventory
     except Exception as e:
-        st.error(f"Failed to load master source data. Please ensure the 'Merged_Inventory_Data' sheet is shared with the service account. Error: {e}")
+        st.error(f"Failed to load master source data. Error: {e}")
         return None
 
 df_inventory = load_master_inventory_data()
 
 if df_inventory is not None:
     st.success("Successfully loaded the latest master inventory data.")
-    # --- Download button for the master data ---
+    # Download button for the master data
     st.download_button(
         label="📥 Download Master Inventory Data",
         data=to_excel(df_inventory),
