@@ -80,16 +80,6 @@ with st.expander("▶️ Step 1: Merge Inventory Files", expanded=True):
                 except Exception as e:
                     st.error(f"An error occurred during Task 1: {e}")
 
-    # --- NEW: Added download button for Step 1 ---
-    if 'merged_inventory_df' in st.session_state:
-        st.download_button(
-            label="📥 Download Merged Inventory (Step 1)",
-            data=to_excel(st.session_state['merged_inventory_df']),
-            file_name='Transport_Service_Inventory.xlsx',
-            mime='application/vnd.ms-excel'
-        )
-    # --- END NEW ---
-
 # ==============================================================================
 #  TASK 2: Add Port Data to the Main Inventory
 # ==============================================================================
@@ -129,16 +119,13 @@ with st.expander("▶️ Step 2: Add Port Data"):
                 except Exception as e:
                     st.error(f"An error occurred during Task 2: {e}")
 
-    # --- NEW: Added download button for Step 2 ---
     if 'inventory_with_ports_df' in st.session_state:
         st.download_button(
-            label="📥 Download Inventory with Port Data (Step 2)",
+            label="📥 Download Inventory (Optional)",
             data=to_excel(st.session_state['inventory_with_ports_df']),
             file_name='Inventory_with_Ports.xlsx',
             mime='application/vnd.ms-excel'
         )
-    # --- END NEW ---
-
 
 # ==============================================================================
 #  TASK 3: Process Nomination File
