@@ -61,11 +61,14 @@ with st.expander("▶️ Step 1: Process Nomination File", expanded=True):
         with st.spinner('Fetching source data and processing nomination...'):
             try:
                 # --- AUTOMATED DATA FETCHING ---
-                # Open spreadsheets by their exact name
-                wireless_sheet = gsheet_client.open("Wireless").sheet1
-                wireline_sheet = gsheet_client.open("Wireline").sheet1
-                port_an_sheet = gsheet_client.open("Port_AN").sheet1
-                port_ag_sheet = gsheet_client.open("Port_AG").sheet1
+                # Open the single spreadsheet by its name
+                spreadsheet = gsheet_client.open("Automated_Assessment_Source")
+
+                # Access each tab (worksheet) by its name
+                wireless_sheet = spreadsheet.worksheet("Wireless")
+                wireline_sheet = spreadsheet.worksheet("Wireline")
+                port_an_sheet = spreadsheet.worksheet("Port_AN")
+                port_ag_sheet = spreadsheet.worksheet("Port_AG")
                 
                 # Convert to DataFrames
                 df_wireless = pd.DataFrame(wireless_sheet.get_all_records())
