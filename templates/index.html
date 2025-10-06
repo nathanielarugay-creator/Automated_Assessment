@@ -8,6 +8,19 @@
     <style>
         body { padding: 2rem; }
         .table-responsive { max-height: 600px; }
+
+        /* --- NEW CSS FOR THE TABLE --- */
+        .results-table {
+            font-size: 0.8rem; /* Makes the font smaller */
+        }
+        .results-table th {
+            position: sticky;  /* Makes the header sticky */
+            top: 0;            /* Sticks it to the top of its scrolling container */
+            background-color: #f8f9fa; /* Adds a background to prevent text overlap */
+            z-index: 10;       /* Ensures the header stays on top of the content */
+        }
+        /* --- END NEW CSS --- */
+
     </style>
 </head>
 <body>
@@ -18,7 +31,7 @@
             <div class="card-body">
                 <h5 class="card-title">Download Service Inventory Data</h5>
                 <p class="card-text">Download the complete, pre-merged service inventory data from Wireless, Wireline and B2B.</p>
-                <a href="/download_master" class="btn btn-secondary">Download Service Inventory Data</a>
+                <a href="/download_master" class="btn btn-secondary">Download Service Inventory (Optional)</a>
             </div>
         </div>
 
