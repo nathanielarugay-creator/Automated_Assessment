@@ -3,11 +3,12 @@
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-from flask import Flask, render_template, request, make_response
+from flask import Flask, render_template, request, session, make_response
 from io import BytesIO
 import os
 
 app = Flask(__name__)
+# A secret key is required to store results in the session
 app.secret_key = os.urandom(24)
 
 def authenticate_gsheets():
@@ -23,13 +24,8 @@ def get_google_sheet_csv_url(url: str):
 
 def to_excel_in_memory(df):
     output = BytesIO()
-    # --- THIS IS THE CHANGED SECTION ---
-    # Create a clean copy and convert all columns to strings to prevent export errors
     df_cleaned = df.astype(str)
-    # --- END OF CHANGE ---
-    
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        # Use the cleaned DataFrame for the export
         df_cleaned.to_excel(writer, index=False, sheet_name='Sheet1')
     output.seek(0)
     return output
@@ -53,11 +49,11 @@ def index():
 def assess():
     nomination_url = request.form.get('nomination_url')
     if not nomination_url:
-        return "Nomination URL is required.", 400
+        return render_template('index.html', error="Nomination URL is required.")
     try:
         csv_url = get_google_sheet_csv_url(nomination_url)
         if not csv_url:
-            return "Invalid Google Sheet URL format.", 400
+            return render_template('index.html', error="Invalid Google Sheet URL format.")
         df_nomination = pd.read_csv(csv_url)
 
         processed_rows = []
@@ -87,23 +83,37 @@ def assess():
 
         df['Node Assessment'] = df.apply(get_node_assessment, axis=1)
         df['Loop Assessment'] = df.apply(get_loop_assessment, axis=1)
+        
+        # Store result in session to be available for download
+        session['assessment_result'] = df.to_json()
+        
+        # Render the page again, this time with the results table
+        return render_template('index.html', results_table=df.to_html(classes='table table-bordered table-hover', index=False))
 
-        excel_data = to_excel_in_memory(df)
-        response = make_response(excel_data)
-        response.headers['Content-Disposition'] = 'attachment; filename=Final_Assessment.xlsx'
-        response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        return response
     except Exception as e:
-        return f"An error occurred: {e}", 500
+        return render_template('index.html', error=f"An error occurred: {e}")
 
 @app.route('/download_master')
 def download_master():
     excel_data = to_excel_in_memory(df_inventory)
     response = make_response(excel_data)
-    response.headers['Content-Disposition'] = 'attachment; filename=Master_Inventory_Data.xlsx'
+    response.headers['Content-Disposition'] = 'attachment; filename=Service_Inventory_Data.xlsx'
     response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     return response
 
-# This part is for local development, Render will use the Start Command.
+@app.route('/download_assessment')
+def download_assessment():
+    """Serves the last assessment result as an Excel file."""
+    result_json = session.get('assessment_result', None)
+    if result_json is None:
+        return "No assessment result found to download.", 404
+        
+    df_result = pd.read_json(result_json)
+    excel_data = to_excel_in_memory(df_result)
+    response = make_response(excel_data)
+    response.headers['Content-Disposition'] = 'attachment; filename=Final_Assessment.xlsx'
+    response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    return response
+
 if __name__ == '__main__':
     app.run(debug=True)
