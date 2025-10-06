@@ -32,7 +32,7 @@
         <div class="card mb-4">
             <div class="card-body">
                 <h5 class="card-title">Process and Assess Nomination</h5>
-                <form action="/assess" method="POST">
+                <form method="POST">
                     <div class="mb-3">
                         <label for="nomination_url" class="form-label">
                             Enter your Nomination Google Sheet URL. <br>
@@ -40,7 +40,8 @@
                         </label>
                         <input type="url" class="form-control" id="nomination_url" name="nomination_url" required>
                     </div>
-                    <button type="submit" class="btn btn-primary">Process and Assess</button>
+                    <button type="submit" formaction="/assess_and_display" class="btn btn-primary">View Result on Page</button>
+                    <button type="submit" formaction="/assess_and_download" class="btn btn-success">Download Result as Excel</button>
                 </form>
             </div>
         </div>
@@ -49,7 +50,6 @@
         <div class="card">
             <div class="card-body">
                 <h5 class="card-title">Assessment Results</h5>
-                <a href="/download_assessment" class="btn btn-success mb-3">Download Assessment Result</a>
                 <div class="table-responsive">
                     {{ results_table|safe }}
                 </div>
