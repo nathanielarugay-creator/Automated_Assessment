@@ -40,7 +40,7 @@
                         </label>
                         <input type="url" class="form-control" id="nomination_url" name="nomination_url" required>
                     </div>
-                    <button type="submit" class="btn btn-primary">Assess and Download</button>
+                    <button type="submit" class="btn btn-primary">Process and Assess</button>
                 </form>
             </div>
         </div>
@@ -49,17 +49,11 @@
         <div class="card">
             <div class="card-body">
                 <h5 class="card-title">Assessment Results</h5>
-                <a href="/download_assessment" class="btn btn-success mb-3">Download Result Manually</a>
+                <a href="/download_assessment" class="btn btn-success mb-3">Download Assessment Result</a>
                 <div class="table-responsive">
                     {{ results_table|safe }}
                 </div>
             </div>
-            
-            <script>
-                // This will run as soon as the results table is displayed on the page
-                window.location.href = '/download_assessment';
-            </script>
-
         </div>
         {% endif %}
 
