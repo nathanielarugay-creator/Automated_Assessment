@@ -8,19 +8,13 @@
     <style>
         body { padding: 2rem; }
         .table-responsive { max-height: 600px; }
-
-        /* --- NEW CSS FOR THE TABLE --- */
-        .results-table {
-            font-size: 0.8rem; /* Makes the font smaller */
-        }
+        .results-table { font-size: 0.8rem; }
         .results-table th {
-            position: sticky;  /* Makes the header sticky */
-            top: 0;            /* Sticks it to the top of its scrolling container */
-            background-color: #f8f9fa; /* Adds a background to prevent text overlap */
-            z-index: 10;       /* Ensures the header stays on top of the content */
+            position: sticky;
+            top: 0;
+            background-color: #f8f9fa;
+            z-index: 10;
         }
-        /* --- END NEW CSS --- */
-
     </style>
 </head>
 <body>
@@ -31,7 +25,7 @@
             <div class="card-body">
                 <h5 class="card-title">Download Service Inventory Data</h5>
                 <p class="card-text">Download the complete, pre-merged service inventory data from Wireless, Wireline and B2B.</p>
-                <a href="/download_master" class="btn btn-secondary">Download Service Inventory (Optional)</a>
+                <a href="/download_master" class="btn btn-secondary">Download Service Inventory Data</a>
             </div>
         </div>
 
@@ -46,7 +40,7 @@
                         </label>
                         <input type="url" class="form-control" id="nomination_url" name="nomination_url" required>
                     </div>
-                    <button type="submit" class="btn btn-primary">Process and Assess</button>
+                    <button type="submit" class="btn btn-primary">Assess and Download</button>
                 </form>
             </div>
         </div>
@@ -55,11 +49,17 @@
         <div class="card">
             <div class="card-body">
                 <h5 class="card-title">Assessment Results</h5>
-                <a href="/download_assessment" class="btn btn-success mb-3">Download Assessment Result</a>
+                <a href="/download_assessment" class="btn btn-success mb-3">Download Result Manually</a>
                 <div class="table-responsive">
                     {{ results_table|safe }}
                 </div>
             </div>
+            
+            <script>
+                // This will run as soon as the results table is displayed on the page
+                window.location.href = '/download_assessment';
+            </script>
+
         </div>
         {% endif %}
 
