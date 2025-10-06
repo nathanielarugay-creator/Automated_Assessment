@@ -3,63 +3,70 @@
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, HttpUrl
+from flask import Flask, render_template, request, make_response
+from io import BytesIO
+import os
 
-# --- Configuration & Helper Functions ---
+# --- App Initialization ---
+app = Flask(__name__)
+# A secret key is not strictly needed anymore but is good practice
+app.secret_key = os.urandom(24)
 
-# Define the data model for the incoming request
-class NominationRequest(BaseModel):
-    nomination_url: HttpUrl # FastAPI will automatically validate that this is a valid URL
+# --- Helper Functions ---
 
-# Authenticate with Google Sheets using a secret file
 def authenticate_gsheets():
+    """Uses a service account file to authenticate and return a gspread client."""
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_file("google_credentials.json", scopes=scopes)
     return gspread.authorize(creds)
 
-# Transforms a public Google Sheet URL into a direct CSV export link
 def get_google_sheet_csv_url(url: str):
+    """Transforms a public Google Sheet URL into a direct CSV export link."""
     if "docs.google.com/spreadsheets/d/" in url:
         sheet_id = url.split("/d/")[1].split("/")[0]
         return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
     return None
 
+def to_excel_in_memory(df):
+    """Converts a DataFrame to an in-memory Excel file."""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name='Sheet1')
+    output.seek(0)
+    return output
+
 # --- Data Loading (runs once on startup) ---
 
-@cache
-def load_master_inventory_data():
-    """Connects to the private Google Sheet and loads the master inventory data."""
+print("Loading master inventory data...")
+try:
+    gsheet_client = authenticate_gsheets()
+    spreadsheet = gsheet_client.open_by_key('11B6VE-NJI_Xh6SEm7oerIXWoGD45IbEcDbrQmt1uzrQ')
+    worksheet = spreadsheet.worksheet("Merged_Inventory_Data")
+    df_inventory = pd.DataFrame(worksheet.get_all_records())
+    print("Master inventory data loaded successfully.")
+except Exception as e:
+    print(f"CRITICAL: Failed to load master inventory data on startup. Error: {e}")
+    df_inventory = pd.DataFrame()
+
+# --- Web Routes ---
+
+@app.route('/', methods=['GET'])
+def index():
+    """Renders the main page."""
+    return render_template('index.html')
+
+@app.route('/assess', methods=['POST'])
+def assess():
+    """Handles the form submission, runs the assessment, and returns the result as an Excel file download."""
+    nomination_url = request.form.get('nomination_url')
+
+    if not nomination_url:
+        return "Nomination URL is required.", 400
+
     try:
-        gsheet_client = authenticate_gsheets()
-        spreadsheet = gsheet_client.open_by_key('11B6VE-NJI_Xh6SEm7oerIXWoGD45IbEcDbrQmt1uzrQ')
-        worksheet = spreadsheet.worksheet("Merged_Inventory_Data")
-        return pd.DataFrame(worksheet.get_all_records())
-    except Exception as e:
-        # If the master data fails to load, the service cannot start.
-        # In a real-world scenario, you'd add more robust logging here.
-        raise RuntimeError(f"CRITICAL: Failed to load master inventory data on startup. Error: {e}")
-
-df_inventory = load_master_inventory_data()
-
-# --- FastAPI App Definition ---
-
-app = FastAPI(
-    title="Automated Assessment API",
-    description="An API to process network nominations against a master inventory."
-)
-
-@app.post("/assess")
-async def process_assessment(request: NominationRequest):
-    """
-    Accepts a nomination Google Sheet URL, processes it against the master inventory,
-    and returns the final assessment as JSON.
-    """
-    try:
-        # --- Process Nomination Data ---
-        csv_url = get_google_sheet_csv_url(str(request.nomination_url))
+        csv_url = get_google_sheet_csv_url(nomination_url)
         if not csv_url:
-            raise HTTPException(status_code=400, detail="Invalid Google Sheet URL format.")
+            return "Invalid Google Sheet URL format.", 400
         
         df_nomination = pd.read_csv(csv_url)
 
@@ -93,14 +100,26 @@ async def process_assessment(request: NominationRequest):
 
         df['Node Assessment'] = df.apply(get_node_assessment, axis=1)
         df['Loop Assessment'] = df.apply(get_loop_assessment, axis=1)
-
-        # Convert DataFrame to a list of dictionaries for JSON response
-        result = df.to_dict(orient='records')
-        return result
+        
+        # --- CHANGED: Directly return the Excel file for download ---
+        excel_data = to_excel_in_memory(df)
+        response = make_response(excel_data)
+        response.headers['Content-Disposition'] = 'attachment; filename=Final_Assessment.xlsx'
+        response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        return response
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An internal error occurred: {str(e)}")
+        return f"An error occurred: {e}", 500
 
-@app.get("/")
-def read_root():
-    return {"status": "ok", "message": "Automated Assessment API is running."}
+@app.route('/download_master')
+def download_master():
+    """Serves the master inventory data as an Excel file."""
+    excel_data = to_excel_in_memory(df_inventory)
+    response = make_response(excel_data)
+    response.headers['Content-Disposition'] = 'attachment; filename=Master_Inventory_Data.xlsx'
+    response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    return response
+
+# This part is for local development, Render will use the Start Command.
+if __name__ == '__main__':
+    app.run(debug=True)
