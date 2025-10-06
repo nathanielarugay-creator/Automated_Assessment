@@ -75,10 +75,20 @@ with st.expander("▶️ Step 1: Merge Inventory Files", expanded=True):
                     
                     # Store the result in session state for the next step
                     st.session_state['merged_inventory_df'] = final_df
-                    st.success("✅ Step 1 complete! The merged inventory is ready for the next step.")
+                    st.success("✅ Step 1 complete! The merged inventory is ready.")
 
                 except Exception as e:
                     st.error(f"An error occurred during Task 1: {e}")
+
+    # --- NEW: Added download button for Step 1 ---
+    if 'merged_inventory_df' in st.session_state:
+        st.download_button(
+            label="📥 Download Merged Inventory (Step 1)",
+            data=to_excel(st.session_state['merged_inventory_df']),
+            file_name='Transport_Service_Inventory.xlsx',
+            mime='application/vnd.ms-excel'
+        )
+    # --- END NEW ---
 
 # ==============================================================================
 #  TASK 2: Add Port Data to the Main Inventory
@@ -119,6 +129,16 @@ with st.expander("▶️ Step 2: Add Port Data"):
                 except Exception as e:
                     st.error(f"An error occurred during Task 2: {e}")
 
+    # --- NEW: Added download button for Step 2 ---
+    if 'inventory_with_ports_df' in st.session_state:
+        st.download_button(
+            label="📥 Download Inventory with Port Data (Step 2)",
+            data=to_excel(st.session_state['inventory_with_ports_df']),
+            file_name='Inventory_with_Ports.xlsx',
+            mime='application/vnd.ms-excel'
+        )
+    # --- END NEW ---
+
 
 # ==============================================================================
 #  TASK 3: Process Nomination File
@@ -144,15 +164,11 @@ with st.expander("▶️ Step 3: Process Nomination File"):
                     df_nomination = pd.read_excel(uploaded_nomination_file)
                     processed_rows = []
 
-                    # This part can be slow on a web app if the file is large, but we'll keep the logic.
-                    # A more advanced version might use a different approach for user input on duplicates.
-                    # For now, we will auto-select the FIRST match if duplicates are found.
                     for index, nom_row in df_nomination.iterrows():
                         pla_id = nom_row['PLA ID']
                         matches = df_inventory[df_inventory['PLA ID'] == pla_id]
                         
                         if not matches.empty:
-                            # Auto-select the first match for web-based processing
                             selected_inventory_row = matches.iloc[0]
                         else:
                             selected_inventory_row = pd.Series(dtype=object)
@@ -188,13 +204,11 @@ with st.expander("▶️ Step 4: Run Final Assessment"):
                         missing = set(numeric_cols) - set(df.columns)
                         st.error(f"Processed file is missing required columns for assessment: {missing}")
                     else:
-                        # Data cleaning
                         if df['Inv_MYCOM LOOP NORMAL UTILIZATION'].dtype == 'object':
                             df['Inv_MYCOM LOOP NORMAL UTILIZATION'] = df['Inv_MYCOM LOOP NORMAL UTILIZATION'].str.replace('%', '', regex=False).astype(float) / 100
                         for col in numeric_cols:
                             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                         
-                        # Assessment functions
                         def get_node_assessment(row):
                             failures = []
                             if row['GE Port Demand'] >= 1 and (row['Inv_GE_1G'] - row['GE Port Demand']) <= 2: failures.append("Requires Port Augmentation")
@@ -210,14 +224,13 @@ with st.expander("▶️ Step 4: Run Final Assessment"):
 
                         st.success("✅ Assessment complete! Your file is ready for download.")
                         
-                        # Create a download button
                         st.download_button(
-                            label="📥 Download Processed File",
+                            label="📥 Download Final Assessment (Step 4)",
                             data=to_excel(df),
                             file_name='Final_Assessment.xlsx',
                             mime='application/vnd.ms-excel'
                         )
-                        st.dataframe(df.head()) # Show a preview of the final data
+                        st.dataframe(df.head())
 
                 except Exception as e:
                     st.error(f"An error occurred during Task 4: {e}")
