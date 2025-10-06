@@ -18,7 +18,6 @@ def to_excel(df):
     processed_data = output.getvalue()
     return processed_data
 
-# Authenticate with Google Sheets using Streamlit's secrets
 def authenticate_gsheets():
     """Uses st.secrets to authenticate and return a gspread client."""
     scopes = [
@@ -30,6 +29,13 @@ def authenticate_gsheets():
     )
     return gspread.authorize(creds)
 
+def get_google_sheet_csv_url(url):
+    """Transforms a public Google Sheet URL into a direct CSV export link."""
+    if "docs.google.com/spreadsheets/d/" in url:
+        sheet_id = url.split("/d/")[1].split("/")[0]
+        return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    return None
+
 # ==============================================================================
 #  STREAMLIT WEB APP INTERFACE
 # ==============================================================================
@@ -38,68 +44,113 @@ st.set_page_config(page_title="Automated Assessment Tool", layout="centered")
 st.title("Transport Network Automated Assessment ⚙️")
 
 # --- DATA LOADING SECTION ---
-@st.cache_data(ttl=3600) # Cache the data for 1 hour
-def load_premerged_data():
-    """Connects to Google Sheets and loads the pre-merged inventory data."""
+@st.cache_data(ttl=3600) # Cache the master data for 1 hour
+def load_master_inventory_data():
+    """Connects to the private Google Sheet and loads the master inventory data."""
     try:
         gsheet_client = authenticate_gsheets()
-        # Open the single, pre-merged spreadsheet
-        spreadsheet = gsheet_client.open("Merged_Inventory_Data")
-        worksheet = spreadsheet.sheet1
+        # Open the specific spreadsheet by its ID/key
+        spreadsheet = gsheet_client.open_by_key('11B6VE-NJI_Xh6SEm7oerIXWoGD45IbEcDbrQmt1uzrQ')
+        # Open the specific tab by its name
+        worksheet = spreadsheet.worksheet("Merged_Inventory_Data")
         df_inventory = pd.DataFrame(worksheet.get_all_records())
         return df_inventory
     except Exception as e:
-        st.error(f"Failed to load source data from 'Merged_Inventory_Data'. Please ensure the sheet exists and is shared correctly. Error: {e}")
+        st.error(f"Failed to load master source data. Please ensure the 'Merged_Inventory_Data' sheet is shared with the service account. Error: {e}")
         return None
 
-df_inventory = load_premerged_data()
+df_inventory = load_master_inventory_data()
 
 if df_inventory is not None:
-    st.success("Successfully loaded the latest merged inventory data.")
-
-    # --- NEW: Download button for the merged source data ---
+    st.success("Successfully loaded the latest master inventory data.")
+    # --- Download button for the master data ---
     st.download_button(
-        label="📥 Download Merged Source Data",
+        label="📥 Download Master Inventory Data",
         data=to_excel(df_inventory),
-        file_name='Merged_Inventory_Data.xlsx',
+        file_name='Master_Inventory_Data.xlsx',
         mime='application/vnd.ms-excel'
     )
-    # --- END NEW ---
-
 else:
     st.stop() # Stop the app if data loading fails
 
 # ==============================================================================
-#  Step 1: Process Nomination File
+#  Step 1: Process Nomination File from URL
 # ==============================================================================
-with st.expander("▶️ Step 1: Process Nomination File", expanded=True):
-    st.markdown("Upload your `Nomination.xlsx` file. The app will use the latest pre-merged source data.")
+with st.expander("▶️ Step 1: Process Nomination from Google Sheet URL", expanded=True):
+    st.markdown("Paste the URL of your nomination Google Sheet below. Ensure it is shared with **'Anyone with the link can view'**.")
+    
+    nomination_url = st.text_input("Enter your Nomination Google Sheet URL here:")
 
-    uploaded_nomination_file = st.file_uploader(
-        "Upload your 'Nomination.xlsx' file",
-        type=['xlsx'],
-        key="nomination_uploader"
-    )
+    if st.button("Process Nomination"):
+        if not nomination_url:
+            st.warning("Please enter a URL.")
+        else:
+            with st.spinner('Fetching your nomination data and processing...'):
+                try:
+                    csv_url = get_google_sheet_csv_url(nomination_url)
+                    if csv_url:
+                        df_nomination = pd.read_csv(csv_url)
+                        
+                        processed_rows = []
+                        for index, nom_row in df_nomination.iterrows():
+                            pla_id = nom_row['PLA ID']
+                            matches = df_inventory[df_inventory['PLA ID'] == pla_id]
+                            selected_inventory_row = matches.iloc[0] if not matches.empty else pd.Series(dtype=object)
+                            combined_row = pd.concat([nom_row, selected_inventory_row.add_prefix('Inv_')])
+                            processed_rows.append(combined_row)
+                        
+                        df_final = pd.DataFrame(processed_rows)
+                        st.session_state['processed_nomination_df'] = df_final
+                        st.success("✅ Nomination file processed successfully.")
+                        st.info("You can now proceed to Step 2.")
+                    else:
+                        st.error("Invalid Google Sheet URL format.")
 
-    if uploaded_nomination_file is not None:
-        with st.spinner('Processing nomination...'):
-            try:
-                df_nomination = pd.read_excel(uploaded_nomination_file)
-                processed_rows = []
-                for index, nom_row in df_nomination.iterrows():
-                    pla_id = nom_row['PLA ID']
-                    matches = df_inventory[df_inventory['PLA ID'] == pla_id]
-                    selected_inventory_row = matches.iloc[0] if not matches.empty else pd.Series(dtype=object)
-                    combined_row = pd.concat([nom_row, selected_inventory_row.add_prefix('Inv_')])
-                    processed_rows.append(combined_row)
-                
-                df_final = pd.DataFrame(processed_rows)
-                st.session_state['processed_nomination_df'] = df_final
-                st.success("✅ Nomination file processed successfully.")
-
-            except Exception as e:
-                st.error(f"An error occurred during processing: {e}")
+                except Exception as e:
+                    st.error(f"An error occurred. Please check your URL and sharing settings. Error: {e}")
 
 # ==============================================================================
 #  Step 2: Run Final Assessment & Download
-# =================================
+# ==============================================================================
+with st.expander("▶️ Step 2: Run Final Assessment", expanded=True):
+    st.markdown("Run the final assessment on your processed nomination data.")
+
+    if st.button("Run Final Assessment"):
+        if 'processed_nomination_df' not in st.session_state:
+            st.warning("⚠️ Please process a Nomination Sheet URL in Step 1 first.")
+        else:
+            with st.spinner('Running final assessment...'):
+                try:
+                    df = st.session_state['processed_nomination_df'].copy()
+                    numeric_cols = ['GE Port Demand', '10GE Port Demand', 'Inv_GE_1G', 'Inv_GE_10G', 'Inv_MYCOM LOOP NORMAL UTILIZATION']
+                    
+                    if 'Inv_MYCOM LOOP NORMAL UTILIZATION' in df and df['Inv_MYCOM LOOP NORMAL UTILIZATION'].dtype == 'object':
+                        df['Inv_MYCOM LOOP NORMAL UTILIZATION'] = df['Inv_MYCOM LOOP NORMAL UTILIZATION'].str.replace('%', '', regex=False).astype(float) / 100
+                    for col in numeric_cols:
+                         if col in df:
+                            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                    
+                    def get_node_assessment(row):
+                        failures = []
+                        if row.get('GE Port Demand', 0) >= 1 and (row.get('Inv_GE_1G', 0) - row.get('GE Port Demand', 0)) <= 2: failures.append("Requires Port Augmentation")
+                        if row.get('10GE Port Demand', 0) >= 1 and (row.get('Inv_GE_10G', 0) - row.get('10GE Port Demand', 0)) <= 2: failures.append("Requires Port Augmentation")
+                        return " & ".join(failures) if failures else ("With Headroom" if row.get('GE Port Demand', 0) >= 1 or row.get('10GE Port Demand', 0) >= 1 else "No Port Demand")
+
+                    def get_loop_assessment(row):
+                        return "Requires Loop Upgrade" if row.get('Inv_MYCOM LOOP NORMAL UTILIZATION', 0) >= 0.7 else "With Headroom"
+
+                    df['Node Assessment'] = df.apply(get_node_assessment, axis=1)
+                    df['Loop Assessment'] = df.apply(get_loop_assessment, axis=1)
+
+                    st.success("✅ Assessment complete! Your file is ready for download.")
+                    
+                    st.download_button(
+                        label="📥 Download Final Assessment",
+                        data=to_excel(df),
+                        file_name='Final_Assessment.xlsx',
+                        mime='application/vnd.ms-excel'
+                    )
+                    st.dataframe(df.head())
+
+                except Exception as e:
+                    st.error(f"An error occurred during assessment: {e}")
