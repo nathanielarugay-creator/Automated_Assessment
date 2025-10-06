@@ -3,6 +3,8 @@
 import pandas as pd
 import streamlit as st
 from io import BytesIO
+import gspread
+from google.oauth2.service_account import Credentials
 
 # ==============================================================================
 #  Helper Functions
@@ -16,174 +18,139 @@ def to_excel(df):
     processed_data = output.getvalue()
     return processed_data
 
-def get_google_sheet_csv_url(url):
-    """Transforms a Google Sheet URL into a direct CSV export link."""
-    if "docs.google.com/spreadsheets/d/" in url:
-        sheet_id = url.split("/d/")[1].split("/")[0]
-        return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
-    return None
+# Authenticate with Google Sheets using Streamlit's secrets
+def authenticate_gsheets():
+    """Uses st.secrets to authenticate and return a gspread client."""
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    creds = Credentials.from_service_account_info(
+        st.secrets["google_credentials"], scopes=scopes
+    )
+    return gspread.authorize(creds)
 
 # ==============================================================================
 #  STREAMLIT WEB APP INTERFACE
 # ==============================================================================
 
 st.set_page_config(page_title="Automated Assessment Tool", layout="centered")
-
 st.title("Transport Network Automated Assessment ⚙️")
 
-st.markdown("""
-### **Pre-requisites:**
-1.  Ensure your source Google Sheets are shared with **"Anyone with the link can view"**.
-2.  Use the provided **Nomination.xlsx** template file for your nominations.
----
-""")
+# Authenticate once and cache the client
+try:
+    gsheet_client = authenticate_gsheets()
+    st.info("Successfully connected to Google Drive.")
+except Exception as e:
+    st.error("Failed to connect to Google Sheets. Please check your secrets configuration.")
+    st.stop() # Stop the app if authentication fails
 
 # ==============================================================================
-#  NEW: Step 1: Load Source Data from Google Sheets
+#  Step 1: Process Nomination File
 # ==============================================================================
-with st.expander("▶️ Step 1: Load Source Data from Google Sheets", expanded=True):
-    st.markdown("Paste the share links for your Google Sheets below.")
-    
-    url_inv_wireless = st.text_input("Wireless Inventory Sheet URL")
-    url_inv_wireline = st.text_input("Wireline Inventory Sheet URL")
-    url_port_1 = st.text_input("Port Inventory Sheet 1 URL (e.g., AN)")
-    url_port_2 = st.text_input("Port Inventory Sheet 2 URL (e.g., AG)")
+with st.expander("▶️ Step 1: Process Nomination File", expanded=True):
+    st.markdown("Upload your `Nomination.xlsx` file. The app will automatically fetch the latest source data from the private Google Drive.")
 
-    if st.button("1. Load and Prepare Source Data"):
-        urls = [url_inv_wireless, url_inv_wireline, url_port_1, url_port_2]
-        if not all(urls):
-            st.error("❌ Please provide all four Google Sheet URLs.")
-        else:
-            with st.spinner('Fetching and processing data from Google Sheets...'):
-                try:
-                    # Task 1: Merge Inventories
-                    df1 = pd.read_csv(get_google_sheet_csv_url(url_inv_wireless))
-                    df2 = pd.read_csv(get_google_sheet_csv_url(url_inv_wireline))
-                    combined_df = pd.concat([df1, df2], ignore_index=True)
-                    combined_df.drop_duplicates(subset=['Transport NE'], keep='first', inplace=True)
-
-                    final_columns = [
-                        'Transport NE', 'PLA ID', 'Site Name', 'Territory', 'Network Type', 'Equipment Type/Model', 
-                        'Equipment Status', 'AN CONFIG TYPE', 'LOOP NAME', 'MYCOM LOOP CATEGORY', 'LOOP CAPACITY CATEGORY', 
-                        'MYCOM GW1 CAPACITY (GBPS)', 'MYCOM GW2 CAPACITY (GBPS)', 'MYCOM LOOP NORMAL UTILIZATION', 
-                        'MYCOM LOOP NORMAL STATUS', 'MYCOM LOOP OUTAGE UTILIZATION', 'MYCOM LOOP OUTAGE STATUS', 
-                        'AG1 HOMING NE NAME', 'AG2 HOMING NE NAME'
-                    ]
-                    existing_columns = [col for col in final_columns if col in combined_df.columns]
-                    df_main = combined_df[existing_columns]
-                    st.success("✅ Raw inventories merged successfully.")
-
-                    # Task 2: Add Port Data
-                    df_port1 = pd.read_csv(get_google_sheet_csv_url(url_port_1))
-                    df_port2 = pd.read_csv(get_google_sheet_csv_url(url_port_2))
-                    df_ports = pd.concat([df_port1, df_port2], ignore_index=True)
-                    
-                    columns_to_copy = ['NE_Name', 'GE_1G', 'Total_of_GE_1G', 'GE_10G', 'Total_of_GE_10G', '25GE']
-                    if not all(col in df_ports.columns for col in columns_to_copy):
-                        missing = set(columns_to_copy) - set(df_ports.columns)
-                        st.error(f"Port files are missing required columns: {missing}")
-                    else:
-                        port_data_to_merge = df_ports[columns_to_copy].drop_duplicates(subset=['NE_Name'], keep='first')
-                        df_updated = pd.merge(df_main, port_data_to_merge, left_on='Transport NE', right_on='NE_Name', how='left').drop(columns=['NE_Name'])
-                        
-                        st.session_state['inventory_with_ports_df'] = df_updated
-                        st.success("✅ Port data added. The prepared inventory is ready!")
-                        st.info("You can now proceed to Step 2 below.")
-                        
-                except Exception as e:
-                    st.error(f"An error occurred: {e}")
-                    st.warning("Please check that your URLs are correct and the sheets are publicly shared.")
-
-
-# ==============================================================================
-#  CHANGED: Step 2 (was 3): Process Nomination File
-# ==============================================================================
-with st.expander("▶️ Step 2: Process Nomination File"):
-    st.markdown("Upload your `Nomination.xlsx` file. This will be merged with the prepared data from Step 1.")
-    
     uploaded_nomination_file = st.file_uploader(
         "Upload your 'Nomination.xlsx' file",
         type=['xlsx'],
-        key="task3_uploader"
+        key="nomination_uploader"
     )
 
-    if st.button("2. Process Nomination"):
-        if 'inventory_with_ports_df' not in st.session_state:
-            st.warning("⚠️ Please complete Step 1 first by clicking the 'Load and Prepare' button.")
-        elif uploaded_nomination_file is None:
-            st.error("❌ Please upload the nomination file.")
-        else:
-            with st.spinner('Processing nominations...'):
-                try:
-                    df_inventory = st.session_state['inventory_with_ports_df']
-                    df_nomination = pd.read_excel(uploaded_nomination_file)
-                    processed_rows = []
+    if uploaded_nomination_file is not None:
+        with st.spinner('Fetching source data and processing nomination...'):
+            try:
+                # --- AUTOMATED DATA FETCHING ---
+                # Open spreadsheets by their exact name
+                wireless_sheet = gsheet_client.open("Wireless").sheet1
+                wireline_sheet = gsheet_client.open("Wireline").sheet1
+                port_an_sheet = gsheet_client.open("Port_AN").sheet1
+                port_ag_sheet = gsheet_client.open("Port_AG").sheet1
+                
+                # Convert to DataFrames
+                df_wireless = pd.DataFrame(wireless_sheet.get_all_records())
+                df_wireline = pd.DataFrame(wireline_sheet.get_all_records())
+                df_port_an = pd.DataFrame(port_an_sheet.get_all_records())
+                df_port_ag = pd.DataFrame(port_ag_sheet.get_all_records())
 
-                    for index, nom_row in df_nomination.iterrows():
-                        pla_id = nom_row['PLA ID']
-                        matches = df_inventory[df_inventory['PLA ID'] == pla_id]
-                        
-                        if not matches.empty:
-                            selected_inventory_row = matches.iloc[0]
-                        else:
-                            selected_inventory_row = pd.Series(dtype=object)
+                # Task 1: Merge Inventories
+                combined_df = pd.concat([df_wireless, df_wireline], ignore_index=True)
+                combined_df.drop_duplicates(subset=['Transport NE'], keep='first', inplace=True)
+                
+                final_columns = [
+                    'Transport NE', 'PLA ID', 'Site Name', 'Territory', 'Network Type', 'Equipment Type/Model', 
+                    'Equipment Status', 'AN CONFIG TYPE', 'LOOP NAME', 'MYCOM LOOP CATEGORY', 'LOOP CAPACITY CATEGORY', 
+                    'MYCOM GW1 CAPACITY (GBPS)', 'MYCOM GW2 CAPACITY (GBPS)', 'MYCOM LOOP NORMAL UTILIZATION', 
+                    'MYCOM LOOP NORMAL STATUS', 'MYCOM LOOP OUTAGE UTILIZATION', 'MYCOM LOOP OUTAGE STATUS', 
+                    'AG1 HOMING NE NAME', 'AG2 HOMING NE NAME'
+                ]
+                existing_columns = [col for col in final_columns if col in combined_df.columns]
+                df_main = combined_df[existing_columns]
 
-                        combined_row = pd.concat([nom_row, selected_inventory_row.add_prefix('Inv_')])
-                        processed_rows.append(combined_row)
-                    
-                    df_final = pd.DataFrame(processed_rows)
-                    st.session_state['processed_nomination_df'] = df_final
-                    st.success("✅ Step 2 complete! The nomination file has been processed.")
+                # Task 2: Add Port Data
+                df_ports = pd.concat([df_port_an, df_port_ag], ignore_index=True)
+                columns_to_copy = ['NE_Name', 'GE_1G', 'Total_of_GE_1G', 'GE_10G', 'Total_of_GE_10G', '25GE']
+                port_data_to_merge = df_ports[columns_to_copy].drop_duplicates(subset=['NE_Name'], keep='first')
+                df_inventory = pd.merge(df_main, port_data_to_merge, left_on='Transport NE', right_on='NE_Name', how='left').drop(columns=['NE_Name'])
 
-                except Exception as e:
-                    st.error(f"An error occurred: {e}")
+                # --- NOMINATION PROCESSING ---
+                df_nomination = pd.read_excel(uploaded_nomination_file)
+                processed_rows = []
+                for index, nom_row in df_nomination.iterrows():
+                    pla_id = nom_row['PLA ID']
+                    matches = df_inventory[df_inventory['PLA ID'] == pla_id]
+                    selected_inventory_row = matches.iloc[0] if not matches.empty else pd.Series(dtype=object)
+                    combined_row = pd.concat([nom_row, selected_inventory_row.add_prefix('Inv_')])
+                    processed_rows.append(combined_row)
+                
+                df_final = pd.DataFrame(processed_rows)
+                st.session_state['processed_nomination_df'] = df_final
+                st.success("✅ Nomination file processed successfully with the latest source data.")
+
+            except Exception as e:
+                st.error(f"An error occurred during processing: {e}")
 
 # ==============================================================================
-#  CHANGED: Step 3 (was 4): Run Final Assessment & Download
+#  Step 2: Run Final Assessment & Download
 # ==============================================================================
-with st.expander("▶️ Step 3: Run Final Assessment"):
-    st.markdown("Run the final assessment on the processed nomination file from Step 2 and download the result.")
+with st.expander("▶️ Step 2: Run Final Assessment", expanded=True):
+    st.markdown("Run the final assessment on the processed nomination file.")
 
-    if st.button("3. Run Assessment"):
+    if st.button("Run Final Assessment"):
         if 'processed_nomination_df' not in st.session_state:
-            st.warning("⚠️ Please complete Step 2 first.")
+            st.warning("⚠️ Please upload and process a Nomination file in Step 1 first.")
         else:
             with st.spinner('Running final assessment...'):
                 try:
                     df = st.session_state['processed_nomination_df'].copy()
-
                     numeric_cols = ['GE Port Demand', '10GE Port Demand', 'Inv_GE_1G', 'Inv_GE_10G', 'Inv_MYCOM LOOP NORMAL UTILIZATION']
-                    if not all(col in df.columns for col in numeric_cols):
-                        missing = set(numeric_cols) - set(df.columns)
-                        st.error(f"Processed file is missing required columns: {missing}")
-                    else:
-                        if df['Inv_MYCOM LOOP NORMAL UTILIZATION'].dtype == 'object':
-                            df['Inv_MYCOM LOOP NORMAL UTILIZATION'] = df['Inv_MYCOM LOOP NORMAL UTILIZATION'].str.replace('%', '', regex=False).astype(float) / 100
-                        for col in numeric_cols:
-                            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-                        
-                        def get_node_assessment(row):
-                            failures = []
-                            if row['GE Port Demand'] >= 1 and (row['Inv_GE_1G'] - row['GE Port Demand']) <= 2: failures.append("Requires Port Augmentation")
-                            if row['10GE Port Demand'] >= 1 and (row['Inv_GE_10G'] - row['10GE Port Demand']) <= 2: failures.append("Requires Port Augmentation")
-                            if not failures: return "With Headroom" if row['GE Port Demand'] >= 1 or row['10GE Port Demand'] >= 1 else "No Port Demand"
-                            return " & ".join(failures)
+                    
+                    if df['Inv_MYCOM LOOP NORMAL UTILIZATION'].dtype == 'object':
+                        df['Inv_MYCOM LOOP NORMAL UTILIZATION'] = df['Inv_MYCOM LOOP NORMAL UTILIZATION'].str.replace('%', '', regex=False).astype(float) / 100
+                    for col in numeric_cols:
+                        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                    
+                    def get_node_assessment(row):
+                        failures = []
+                        if row['GE Port Demand'] >= 1 and (row['Inv_GE_1G'] - row['GE Port Demand']) <= 2: failures.append("Requires Port Augmentation")
+                        if row['10GE Port Demand'] >= 1 and (row['Inv_GE_10G'] - row['10GE Port Demand']) <= 2: failures.append("Requires Port Augmentation")
+                        return " & ".join(failures) if failures else ("With Headroom" if row['GE Port Demand'] >= 1 or row['10GE Port Demand'] >= 1 else "No Port Demand")
 
-                        def get_loop_assessment(row):
-                            return "Requires Loop Upgrade" if row['Inv_MYCOM LOOP NORMAL UTILIZATION'] >= 0.7 else "With Headroom"
+                    def get_loop_assessment(row):
+                        return "Requires Loop Upgrade" if row['Inv_MYCOM LOOP NORMAL UTILIZATION'] >= 0.7 else "With Headroom"
 
-                        df['Node Assessment'] = df.apply(get_node_assessment, axis=1)
-                        df['Loop Assessment'] = df.apply(get_loop_assessment, axis=1)
+                    df['Node Assessment'] = df.apply(get_node_assessment, axis=1)
+                    df['Loop Assessment'] = df.apply(get_loop_assessment, axis=1)
 
-                        st.success("✅ Assessment complete! Your file is ready for download.")
-                        
-                        st.download_button(
-                            label="📥 Download Final Assessment",
-                            data=to_excel(df),
-                            file_name='Final_Assessment.xlsx',
-                            mime='application/vnd.ms-excel'
-                        )
-                        st.dataframe(df.head())
+                    st.success("✅ Assessment complete! Your file is ready for download.")
+                    
+                    st.download_button(
+                        label="📥 Download Final Assessment",
+                        data=to_excel(df),
+                        file_name='Final_Assessment.xlsx',
+                        mime='application/vnd.ms-excel'
+                    )
+                    st.dataframe(df.head())
 
                 except Exception as e:
-                    st.error(f"An error occurred: {e}")
+                    st.error(f"An error occurred during assessment: {e}")
