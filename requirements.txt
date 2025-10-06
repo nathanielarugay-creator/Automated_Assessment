@@ -1,6 +1,6 @@
 pandas
-streamlit
 openpyxl
-xlsxwriter
 gspread
 google-auth-oauthlib
+fastapi
+uvicorn[standard]
