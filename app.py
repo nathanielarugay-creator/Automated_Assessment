@@ -30,7 +30,7 @@ def to_excel_in_memory(df):
     output.seek(0)
     return output
 
-# --- Core Assessment Logic (with fix for empty strings) ---
+# --- Core Assessment Logic ---
 
 def run_assessment_logic(df_nomination, df_inventory, choices={}):
     processed_rows = []
@@ -49,13 +49,14 @@ def run_assessment_logic(df_nomination, df_inventory, choices={}):
         processed_rows.append(combined_row)
         
     df = pd.DataFrame(processed_rows)
-
-    # --- THIS SECTION HAS BEEN UPDATED ---
-    # More robustly handle the utilization column to prevent conversion errors
+    
+    # --- THIS SECTION HAS BEEN CORRECTED ---
+    # Simplified to correctly handle decimal-only utilization values.
     if 'Inv_MYCOM LOOP NORMAL UTILIZATION' in df:
         util_col = df['Inv_MYCOM LOOP NORMAL UTILIZATION'].astype(str).str.replace('%', '', regex=False)
-        df['Inv_MYCOM LOOP NORMAL UTILIZATION'] = pd.to_numeric(util_col, errors='coerce').fillna(0) / 100
-    # --- END OF UPDATE ---
+        # Safely convert to a number, but DO NOT divide by 100
+        df['Inv_MYCOM LOOP NORMAL UTILIZATION'] = pd.to_numeric(util_col, errors='coerce').fillna(0)
+    # --- END OF CORRECTION ---
 
     numeric_cols = ['GE Port Demand', '10GE Port Demand', 'Inv_GE_1G', 'Inv_GE_10G', 'Inv_25GE']
     for col in numeric_cols:
