@@ -21,6 +21,12 @@
     <div class="container">
         <h1 class="mb-4">Transport Network Automated Assessment ⚙️</h1>
 
+        {% if error %}
+        <div class="alert alert-danger" role="alert">
+            {{ error }}
+        </div>
+        {% endif %}
+
         <div class="card mb-4">
             <div class="card-body">
                 <h5 class="card-title">Download Service Inventory Data</h5>
@@ -29,6 +35,7 @@
             </div>
         </div>
 
+        {% if not duplicates_to_resolve %}
         <div class="card mb-4">
             <div class="card-body">
                 <h5 class="card-title">Process and Assess Nomination</h5>
@@ -45,6 +52,40 @@
                 </form>
             </div>
         </div>
+        {% endif %}
+
+        {% if duplicates_to_resolve %}
+        <div class="card border-warning mb-4">
+            <div class="card-header bg-warning">
+                <h5 class="card-title mb-0">Action Required: Resolve Duplicates</h5>
+            </div>
+            <div class="card-body">
+                <p>The following PLA IDs were found in the master data more than once. Please choose the correct 'Transport NE' for each to continue.</p>
+                <form action="/assess_with_choices" method="POST">
+                    <input type="hidden" name="nomination_url" value="{{ nomination_url }}">
+                    <input type="hidden" name="action" value="{{ action }}">
+
+                    {% for pla_id, ne_options in duplicates_to_resolve.items() %}
+                    <div class="mb-3">
+                        <strong>PLA ID: {{ pla_id }}</strong>
+                        <div class="ms-3">
+                            {% for ne in ne_options %}
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="{{ pla_id }}" id="{{ ne }}" value="{{ ne }}" required>
+                                <label class="form-check-label" for="{{ ne }}">
+                                    {{ ne }}
+                                </label>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                    <hr>
+                    <button type="submit" class="btn btn-warning">Continue Assessment with Selections</button>
+                </form>
+            </div>
+        </div>
+        {% endif %}
 
         {% if results_table %}
         <div class="card">

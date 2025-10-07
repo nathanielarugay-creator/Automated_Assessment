@@ -30,16 +30,26 @@ def to_excel_in_memory(df):
     output.seek(0)
     return output
 
-# --- Core Assessment Logic (as a reusable function) ---
+# --- Core Assessment Logic (now accepts user choices) ---
 
-def run_assessment_logic(df_nomination, df_inventory):
+def run_assessment_logic(df_nomination, df_inventory, choices={}):
     processed_rows = []
     for index, nom_row in df_nomination.iterrows():
         pla_id = nom_row['PLA ID']
         matches = df_inventory[df_inventory['PLA ID'] == pla_id]
-        selected_inventory_row = matches.iloc[0] if not matches.empty else pd.Series(dtype=object)
+        
+        selected_inventory_row = pd.Series(dtype=object)
+        if not matches.empty:
+            if len(matches) > 1 and pla_id in choices:
+                # Use the user's choice if provided
+                selected_inventory_row = matches[matches['Transport NE'] == choices[pla_id]].iloc[0]
+            else:
+                # Default to the first match
+                selected_inventory_row = matches.iloc[0]
+                
         combined_row = pd.concat([nom_row, selected_inventory_row.add_prefix('Inv_')])
         processed_rows.append(combined_row)
+        
     df = pd.DataFrame(processed_rows)
 
     numeric_cols = ['GE Port Demand', '10GE Port Demand', 'Inv_GE_1G', 'Inv_GE_10G', 'Inv_MYCOM LOOP NORMAL UTILIZATION']
@@ -81,36 +91,78 @@ except Exception as e:
 def index():
     return render_template('index.html')
 
-@app.route('/assess_and_display', methods=['POST'])
-def assess_and_display():
-    nomination_url = request.form.get('nomination_url')
+def handle_assessment_request(nomination_url, action='display'):
+    """Helper to avoid code duplication for display and download actions."""
     if not nomination_url:
         return render_template('index.html', error="Nomination URL is required.")
+    
     try:
         csv_url = get_google_sheet_csv_url(nomination_url)
         df_nomination = pd.read_csv(csv_url)
+        
+        # --- Pre-flight check for duplicates ---
+        nominated_pla_ids = df_nomination['PLA ID'].unique()
+        inventory_counts = df_inventory['PLA ID'].value_counts()
+        duplicates_found = inventory_counts[inventory_counts > 1]
+        
+        duplicates_to_resolve = {}
+        for pla_id in nominated_pla_ids:
+            if pla_id in duplicates_found.index:
+                duplicate_nes = df_inventory[df_inventory['PLA ID'] == pla_id]['Transport NE'].tolist()
+                duplicates_to_resolve[pla_id] = duplicate_nes
+                
+        if duplicates_to_resolve:
+            # If duplicates are found, stop and ask the user to resolve them
+            return render_template('index.html', duplicates_to_resolve=duplicates_to_resolve, nomination_url=nomination_url, action=action)
+            
+        # If no duplicates, proceed with assessment
         df_result = run_assessment_logic(df_nomination, df_inventory)
-        return render_template('index.html', results_table=df_result.to_html(classes='table table-bordered table-hover results-table', index=False))
+        
+        if action == 'display':
+            return render_template('index.html', results_table=df_result.to_html(classes='table table-bordered table-hover results-table', index=False))
+        else: # action == 'download'
+            excel_data = to_excel_in_memory(df_result)
+            response = make_response(excel_data)
+            response.headers['Content-Disposition'] = 'attachment; filename=Final_Assessment.xlsx'
+            response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            return response
+
     except Exception as e:
         return render_template('index.html', error=f"An error occurred: {e}")
+
+@app.route('/assess_and_display', methods=['POST'])
+def assess_and_display():
+    nomination_url = request.form.get('nomination_url')
+    return handle_assessment_request(nomination_url, action='display')
 
 @app.route('/assess_and_download', methods=['POST'])
 def assess_and_download():
     nomination_url = request.form.get('nomination_url')
-    if not nomination_url:
-        return "Nomination URL is required.", 400
+    return handle_assessment_request(nomination_url, action='download')
+
+@app.route('/assess_with_choices', methods=['POST'])
+def assess_with_choices():
+    """Handles submission from the duplicate resolution form."""
+    nomination_url = request.form.get('nomination_url')
+    action = request.form.get('action')
+    choices = {key: value for key, value in request.form.items() if key not in ['nomination_url', 'action']}
+    
     try:
         csv_url = get_google_sheet_csv_url(nomination_url)
         df_nomination = pd.read_csv(csv_url)
-        df_result = run_assessment_logic(df_nomination, df_inventory)
+        df_result = run_assessment_logic(df_nomination, df_inventory, choices=choices)
         
-        excel_data = to_excel_in_memory(df_result)
-        response = make_response(excel_data)
-        response.headers['Content-Disposition'] = 'attachment; filename=Final_Assessment.xlsx'
-        response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        return response
+        if action == 'display':
+            return render_template('index.html', results_table=df_result.to_html(classes='table table-bordered table-hover results-table', index=False))
+        else: # action == 'download'
+            excel_data = to_excel_in_memory(df_result)
+            response = make_response(excel_data)
+            response.headers['Content-Disposition'] = 'attachment; filename=Final_Assessment.xlsx'
+            response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            return response
+            
     except Exception as e:
-        return f"An error occurred: {e}", 500
+        return render_template('index.html', error=f"An error occurred: {e}")
 
 @app.route('/download_master')
 def download_master():
