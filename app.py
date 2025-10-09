@@ -60,7 +60,6 @@ def run_assessment_logic(df_nomination, df_inventory, df_sfp, choices={}):
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
     def get_node_assessment(row):
-        # This function now only returns the initial node status
         if row.get('Inv_25GE', 0) > 2:
             return "With Headroom"
         
@@ -78,14 +77,9 @@ def run_assessment_logic(df_nomination, df_inventory, df_sfp, choices={}):
         
         return "No Port Demand"
 
-    def get_loop_assessment(row):
-        return "Requires Loop Upgrade" if row.get('Inv_MYCOM LOOP NORMAL UTILIZATION', 0) >= 0.7 else "With Headroom"
-
-    # --- NEW SFP CHECK FUNCTION ---
     def check_sfp_availability(row):
-        # This function runs only if the initial assessment is "With Headroom"
         if row['Node Assessment'] != 'With Headroom':
-            return (None, None) # Return None for both new columns
+            return (None, None)
             
         transport_ne = row.get('Inv_Transport NE')
         ge_demand = int(row.get('GE Port Demand', 0))
@@ -122,13 +116,13 @@ def run_assessment_logic(df_nomination, df_inventory, df_sfp, choices={}):
                 sfp_description = "\n".join(sfp_details.apply(lambda r: f"{r['Port']}: {r['Transceiver_Description']}", axis=1))
                 
         return (sfp_availability, sfp_description)
-    # --- END OF SFP CHECK FUNCTION ---
 
-    # --- APPLY ALL ASSESSMENTS ---
+    def get_loop_assessment(row):
+        return "Requires Loop Upgrade" if row.get('Inv_MYCOM LOOP NORMAL UTILIZATION', 0) >= 0.7 else "With Headroom"
+
     df['Node Assessment'] = df.apply(get_node_assessment, axis=1)
     df['Loop Assessment'] = df.apply(get_loop_assessment, axis=1)
     
-    # Apply the SFP check and create the two new columns
     sfp_results = df.apply(check_sfp_availability, axis=1)
     df['SFP Availability'] = [res[0] for res in sfp_results]
     df['SFP Port/Description'] = [res[1] for res in sfp_results]
@@ -240,6 +234,17 @@ def download_master():
     response.headers['Content-Disposition'] = 'attachment; filename=Service_Inventory_Data.xlsx'
     response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     return response
+
+# --- NEW ROUTE ADDED HERE ---
+@app.route('/download_sfp')
+def download_sfp():
+    """Serves the SFP inventory data as an Excel file."""
+    excel_data = to_excel_in_memory(df_sfp_inventory)
+    response = make_response(excel_data)
+    response.headers['Content-Disposition'] = 'attachment; filename=SFP_Inventory.xlsx'
+    response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    return response
+# --- END NEW ROUTE ---
 
 if __name__ == '__main__':
     app.run(debug=True)
