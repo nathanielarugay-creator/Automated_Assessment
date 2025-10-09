@@ -77,6 +77,7 @@ def run_assessment_logic(df_nomination, df_inventory, df_sfp, choices={}):
         
         return "No Port Demand"
 
+    # --- THIS FUNCTION HAS BEEN UPDATED WITH THE PARTIAL AVAILABILITY LOGIC ---
     def check_sfp_availability(row):
         if row['Node Assessment'] != 'With Headroom':
             return (None, None)
@@ -91,7 +92,7 @@ def run_assessment_logic(df_nomination, df_inventory, df_sfp, choices={}):
         ne_sfp_inventory = df_sfp[df_sfp['EquipmentName'] == transport_ne]
         available_sfp_in_ne = ne_sfp_inventory[ne_sfp_inventory['alias_status'] == r'\N'].copy()
 
-        sfp_availability = "No SFP Plugged"
+        sfp_availability = None
         sfp_description = None
 
         if ge_demand > 0:
@@ -100,9 +101,17 @@ def run_assessment_logic(df_nomination, df_inventory, df_sfp, choices={}):
                 available_sfp_in_ne['Transceiver_Description'].str.startswith(tuple(ge_patterns)) &
                 ~available_sfp_in_ne['Transceiver_Description'].str.contains('RJ45|Copper', case=False)
             ]
-            if len(ge_sfp_df) >= ge_demand:
+            sfp_found_count = len(ge_sfp_df)
+            
+            if sfp_found_count == 0:
+                sfp_availability = "No SFP Plugged"
+            elif sfp_found_count >= ge_demand:
                 sfp_availability = "With SFP Plugged"
-                sfp_details = ge_sfp_df.head(ge_demand)
+            else: # Partial availability
+                sfp_availability = f"Only {sfp_found_count} SFP Plugged"
+            
+            if sfp_found_count > 0:
+                sfp_details = ge_sfp_df.head(sfp_found_count)
                 sfp_description = "\n".join(sfp_details.apply(lambda r: f"{r['Port']}: {r['Transceiver_Description']}", axis=1))
 
         if ten_ge_demand > 0:
@@ -110,12 +119,21 @@ def run_assessment_logic(df_nomination, df_inventory, df_sfp, choices={}):
             ten_ge_sfp_df = available_sfp_in_ne[
                 available_sfp_in_ne['Transceiver_Description'].str.startswith(tuple(ten_ge_patterns))
             ]
-            if len(ten_ge_sfp_df) >= ten_ge_demand:
+            sfp_found_count = len(ten_ge_sfp_df)
+            
+            if sfp_found_count == 0:
+                sfp_availability = "No SFP Plugged"
+            elif sfp_found_count >= ten_ge_demand:
                 sfp_availability = "With SFP Plugged"
-                sfp_details = ten_ge_sfp_df.head(ten_ge_demand)
+            else: # Partial availability
+                sfp_availability = f"Only {sfp_found_count} SFP Plugged"
+                
+            if sfp_found_count > 0:
+                sfp_details = ten_ge_sfp_df.head(sfp_found_count)
                 sfp_description = "\n".join(sfp_details.apply(lambda r: f"{r['Port']}: {r['Transceiver_Description']}", axis=1))
                 
         return (sfp_availability, sfp_description)
+    # --- END OF UPDATED FUNCTION ---
 
     def get_loop_assessment(row):
         return "Requires Loop Upgrade" if row.get('Inv_MYCOM LOOP NORMAL UTILIZATION', 0) >= 0.7 else "With Headroom"
@@ -235,16 +253,13 @@ def download_master():
     response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     return response
 
-# --- NEW ROUTE ADDED HERE ---
 @app.route('/download_sfp')
 def download_sfp():
-    """Serves the SFP inventory data as an Excel file."""
     excel_data = to_excel_in_memory(df_sfp_inventory)
     response = make_response(excel_data)
     response.headers['Content-Disposition'] = 'attachment; filename=SFP_Inventory.xlsx'
     response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     return response
-# --- END NEW ROUTE ---
 
 if __name__ == '__main__':
     app.run(debug=True)
