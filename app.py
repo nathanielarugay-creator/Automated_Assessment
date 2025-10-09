@@ -77,7 +77,6 @@ def run_assessment_logic(df_nomination, df_inventory, df_sfp, choices={}):
         
         return "No Port Demand"
 
-    # --- THIS FUNCTION HAS BEEN UPDATED WITH THE TWO FIXES ---
     def check_sfp_availability(row):
         if row['Node Assessment'] != 'With Headroom':
             return (None, None)
@@ -111,9 +110,7 @@ def run_assessment_logic(df_nomination, df_inventory, df_sfp, choices={}):
                 sfp_availability = f"Only {sfp_found_count} SFP Plugged"
             
             if sfp_found_count > 0:
-                # FIX 1: Limit the number of results to the demand
                 sfp_details = ge_sfp_df.head(ge_demand)
-                # FIX 2: Use <br> for HTML line breaks
                 sfp_description = "<br>".join(sfp_details.apply(lambda r: f"{r['Port']}: {r['Transceiver_Description']}", axis=1))
 
         if ten_ge_demand > 0:
@@ -131,13 +128,10 @@ def run_assessment_logic(df_nomination, df_inventory, df_sfp, choices={}):
                 sfp_availability = f"Only {sfp_found_count} SFP Plugged"
                 
             if sfp_found_count > 0:
-                # FIX 1: Limit the number of results to the demand
                 sfp_details = ten_ge_sfp_df.head(ten_ge_demand)
-                # FIX 2: Use <br> for HTML line breaks
                 sfp_description = "<br>".join(sfp_details.apply(lambda r: f"{r['Port']}: {r['Transceiver_Description']}", axis=1))
                 
         return (sfp_availability, sfp_description)
-    # --- END OF UPDATED FUNCTION ---
 
     def get_loop_assessment(row):
         return "Requires Loop Upgrade" if row.get('Inv_MYCOM LOOP NORMAL UTILIZATION', 0) >= 0.7 else "With Headroom"
@@ -205,7 +199,8 @@ def handle_assessment_request(nomination_url, action='display'):
         df_result = run_assessment_logic(df_nomination, df_inventory, df_sfp_inventory)
         
         if action == 'display':
-            return render_template('index.html', results_table=df_result.to_html(classes='table table-bordered table-hover results-table', index=False))
+            # UPDATED: Added escape=False to render the <br> tag
+            return render_template('index.html', results_table=df_result.to_html(classes='table table-bordered table-hover results-table', index=False, escape=False))
         else:
             excel_data = to_excel_in_memory(df_result)
             response = make_response(excel_data)
@@ -238,7 +233,8 @@ def assess_with_choices():
         df_result = run_assessment_logic(df_nomination, df_inventory, df_sfp_inventory, choices=choices)
         
         if action == 'display':
-            return render_template('index.html', results_table=df_result.to_html(classes='table table-bordered table-hover results-table', index=False))
+            # UPDATED: Added escape=False to render the <br> tag
+            return render_template('index.html', results_table=df_result.to_html(classes='table table-bordered table-hover results-table', index=False, escape=False))
         else:
             excel_data = to_excel_in_memory(df_result)
             response = make_response(excel_data)
