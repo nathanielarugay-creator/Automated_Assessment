@@ -77,7 +77,7 @@ def run_assessment_logic(df_nomination, df_inventory, df_sfp, choices={}):
         
         return "No Port Demand"
 
-    # --- THIS FUNCTION HAS BEEN UPDATED WITH THE PARTIAL AVAILABILITY LOGIC ---
+    # --- THIS FUNCTION HAS BEEN UPDATED WITH THE TWO FIXES ---
     def check_sfp_availability(row):
         if row['Node Assessment'] != 'With Headroom':
             return (None, None)
@@ -107,12 +107,14 @@ def run_assessment_logic(df_nomination, df_inventory, df_sfp, choices={}):
                 sfp_availability = "No SFP Plugged"
             elif sfp_found_count >= ge_demand:
                 sfp_availability = "With SFP Plugged"
-            else: # Partial availability
+            else:
                 sfp_availability = f"Only {sfp_found_count} SFP Plugged"
             
             if sfp_found_count > 0:
-                sfp_details = ge_sfp_df.head(sfp_found_count)
-                sfp_description = "\n".join(sfp_details.apply(lambda r: f"{r['Port']}: {r['Transceiver_Description']}", axis=1))
+                # FIX 1: Limit the number of results to the demand
+                sfp_details = ge_sfp_df.head(ge_demand)
+                # FIX 2: Use <br> for HTML line breaks
+                sfp_description = "<br>".join(sfp_details.apply(lambda r: f"{r['Port']}: {r['Transceiver_Description']}", axis=1))
 
         if ten_ge_demand > 0:
             ten_ge_patterns = ['10G', '10000M', '10300M', '11100M', '9800M', '9900M']
@@ -125,12 +127,14 @@ def run_assessment_logic(df_nomination, df_inventory, df_sfp, choices={}):
                 sfp_availability = "No SFP Plugged"
             elif sfp_found_count >= ten_ge_demand:
                 sfp_availability = "With SFP Plugged"
-            else: # Partial availability
+            else:
                 sfp_availability = f"Only {sfp_found_count} SFP Plugged"
                 
             if sfp_found_count > 0:
-                sfp_details = ten_ge_sfp_df.head(sfp_found_count)
-                sfp_description = "\n".join(sfp_details.apply(lambda r: f"{r['Port']}: {r['Transceiver_Description']}", axis=1))
+                # FIX 1: Limit the number of results to the demand
+                sfp_details = ten_ge_sfp_df.head(ten_ge_demand)
+                # FIX 2: Use <br> for HTML line breaks
+                sfp_description = "<br>".join(sfp_details.apply(lambda r: f"{r['Port']}: {r['Transceiver_Description']}", axis=1))
                 
         return (sfp_availability, sfp_description)
     # --- END OF UPDATED FUNCTION ---
