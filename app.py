@@ -32,7 +32,7 @@ def to_excel_in_memory(df):
 
 # --- Core Assessment Logic ---
 
-def run_assessment_logic(df_nomination, df_inventory, choices={}):
+def run_assessment_logic(df_nomination, df_inventory, df_sfp, choices={}):
     processed_rows = []
     for index, nom_row in df_nomination.iterrows():
         pla_id = str(nom_row['PLA ID'])
@@ -59,28 +59,44 @@ def run_assessment_logic(df_nomination, df_inventory, choices={}):
         if col in df:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-    # --- THIS FUNCTION HAS BEEN UPDATED WITH YOUR NEW LOGIC ---
+    # --- THIS FUNCTION HAS BEEN UPDATED WITH THE NEW SFP LOGIC ---
     def get_node_assessment(row):
-        # Rule 1: Override for 25GE ports
+        # Initial checks for overrides or immediate failure
         if row.get('Inv_25GE', 0) > 2:
             return "With Headroom"
-
+        
         ge_demand = row.get('GE Port Demand', 0)
         ten_ge_demand = row.get('10GE Port Demand', 0)
 
-        # Rule 2: Check 1G port headroom. If demand exists and remaining ports are less than 2, it fails.
         if ge_demand > 0 and (row.get('Inv_GE_1G', 0) - ge_demand) < 2:
             return "Requires Port Augmentation"
         
-        # Rule 3: Check 10G port headroom. If demand exists and remaining ports are less than 2, it fails.
         if ten_ge_demand > 0 and (row.get('Inv_GE_10G', 0) - ten_ge_demand) < 2:
             return "Requires Port Augmentation"
             
-        # If no rules failed, determine if there was any demand
+        # If we passed the initial checks and there's demand, it's "With Headroom".
+        # Now, we apply the SFP check on top of that.
         if ge_demand > 0 or ten_ge_demand > 0:
-            return "With Headroom"
+            # SFP Inventory Check
+            available_sfp = df_sfp[df_sfp['alias_status'] == r'\N'].copy()
+            
+            if ge_demand > 0:
+                ge_patterns = ['1Gb', '1000M', '1200M', '1300M']
+                # Filter for GE SFPs, excluding Copper/RJ45
+                ge_sfp_df = available_sfp[
+                    available_sfp['Transceiver_Description'].str.startswith(tuple(ge_patterns)) &
+                    ~available_sfp['Transceiver_Description'].str.contains('RJ45|Copper', case=False)
+                ]
+                return "With SFP Plugged" if not ge_sfp_df.empty else "No SFP Plugged"
+
+            if ten_ge_demand > 0:
+                ten_ge_patterns = ['10G', '10000M', '10300M', '11100M', '9800M', '9900M']
+                # Filter for 10GE SFPs
+                ten_ge_sfp_df = available_sfp[
+                    available_sfp['Transceiver_Description'].str.startswith(tuple(ten_ge_patterns))
+                ]
+                return "With SFP Plugged" if not ten_ge_sfp_df.empty else "No SFP Plugged"
         
-        # If no demand at all
         return "No Port Demand"
     # --- END OF UPDATED FUNCTION ---
 
@@ -91,20 +107,33 @@ def run_assessment_logic(df_nomination, df_inventory, choices={}):
     df['Loop Assessment'] = df.apply(get_loop_assessment, axis=1)
     return df
 
-# --- Data Loading (runs once on startup) ---
+# --- Data Loading (now loads SFP data as well) ---
 
 print("Loading master inventory data...")
 try:
     gsheet_client = authenticate_gsheets()
     spreadsheet = gsheet_client.open_by_key('11B6VE-NJI_Xh6SEm7oerIXWoGD45IbEcDbrQmt1uzrQ')
-    worksheet = spreadsheet.worksheet("Merged_Inventory_Data")
-    df_inventory = pd.DataFrame(worksheet.get_all_records())
+    
+    # Load main inventory
+    worksheet_inv = spreadsheet.worksheet("Merged_Inventory_Data")
+    df_inventory = pd.DataFrame(worksheet_inv.get_all_records())
     if 'PLA ID' in df_inventory.columns:
         df_inventory['PLA ID'] = df_inventory['PLA ID'].astype(str)
-    print("Master inventory data loaded successfully.")
+    
+    # Load SFP inventory
+    worksheet_sfp = spreadsheet.worksheet("SFP_Inventory")
+    df_sfp_inventory = pd.DataFrame(worksheet_sfp.get_all_records())
+    # Ensure key columns exist and are the right type for matching
+    if 'alias_status' in df_sfp_inventory.columns:
+        df_sfp_inventory['alias_status'] = df_sfp_inventory['alias_status'].astype(str)
+    if 'Transceiver_Description' in df_sfp_inventory.columns:
+        df_sfp_inventory['Transceiver_Description'] = df_sfp_inventory['Transceiver_Description'].astype(str)
+
+    print("Master and SFP inventory data loaded successfully.")
 except Exception as e:
-    print(f"CRITICAL: Failed to load master inventory data. Error: {e}")
+    print(f"CRITICAL: Failed to load master data. Error: {e}")
     df_inventory = pd.DataFrame()
+    df_sfp_inventory = pd.DataFrame()
 
 # --- Web Routes ---
 
@@ -133,7 +162,8 @@ def handle_assessment_request(nomination_url, action='display'):
         if duplicates_to_resolve:
             return render_template('index.html', duplicates_to_resolve=duplicates_to_resolve, nomination_url=nomination_url, action=action)
             
-        df_result = run_assessment_logic(df_nomination, df_inventory)
+        # Pass the SFP dataframe to the logic function
+        df_result = run_assessment_logic(df_nomination, df_inventory, df_sfp_inventory)
         
         if action == 'display':
             return render_template('index.html', results_table=df_result.to_html(classes='table table-bordered table-hover results-table', index=False))
@@ -166,7 +196,8 @@ def assess_with_choices():
     try:
         csv_url = get_google_sheet_csv_url(nomination_url)
         df_nomination = pd.read_csv(csv_url, dtype={'PLA ID': str})
-        df_result = run_assessment_logic(df_nomination, df_inventory, choices=choices)
+        # Pass the SFP dataframe to the logic function
+        df_result = run_assessment_logic(df_nomination, df_inventory, df_sfp_inventory, choices=choices)
         
         if action == 'display':
             return render_template('index.html', results_table=df_result.to_html(classes='table table-bordered table-hover results-table', index=False))
