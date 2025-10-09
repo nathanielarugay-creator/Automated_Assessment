@@ -50,27 +50,39 @@ def run_assessment_logic(df_nomination, df_inventory, choices={}):
         
     df = pd.DataFrame(processed_rows)
     
-    # --- THIS SECTION HAS BEEN CORRECTED ---
-    # Simplified to correctly handle decimal-only utilization values.
     if 'Inv_MYCOM LOOP NORMAL UTILIZATION' in df:
         util_col = df['Inv_MYCOM LOOP NORMAL UTILIZATION'].astype(str).str.replace('%', '', regex=False)
-        # Safely convert to a number, but DO NOT divide by 100
         df['Inv_MYCOM LOOP NORMAL UTILIZATION'] = pd.to_numeric(util_col, errors='coerce').fillna(0)
-    # --- END OF CORRECTION ---
 
     numeric_cols = ['GE Port Demand', '10GE Port Demand', 'Inv_GE_1G', 'Inv_GE_10G', 'Inv_25GE']
     for col in numeric_cols:
         if col in df:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
+    # --- THIS FUNCTION HAS BEEN UPDATED WITH YOUR NEW LOGIC ---
     def get_node_assessment(row):
-        if row.get('Inv_25GE', 0) >= 3:
+        # Rule 1: Override for 25GE ports
+        if row.get('Inv_25GE', 0) > 2:
             return "With Headroom"
 
-        failures = []
-        if row.get('GE Port Demand', 0) >= 1 and (row.get('Inv_GE_1G', 0) - row.get('GE Port Demand', 0)) <= 2: failures.append("Requires Port Augmentation")
-        if row.get('10GE Port Demand', 0) >= 1 and (row.get('Inv_GE_10G', 0) - row.get('10GE Port Demand', 0)) <= 2: failures.append("Requires Port Augmentation")
-        return " & ".join(failures) if failures else ("With Headroom" if row.get('GE Port Demand', 0) >= 1 or row.get('10GE Port Demand', 0) >= 1 else "No Port Demand")
+        ge_demand = row.get('GE Port Demand', 0)
+        ten_ge_demand = row.get('10GE Port Demand', 0)
+
+        # Rule 2: Check 1G port headroom. If demand exists and remaining ports are less than 2, it fails.
+        if ge_demand > 0 and (row.get('Inv_GE_1G', 0) - ge_demand) < 2:
+            return "Requires Port Augmentation"
+        
+        # Rule 3: Check 10G port headroom. If demand exists and remaining ports are less than 2, it fails.
+        if ten_ge_demand > 0 and (row.get('Inv_GE_10G', 0) - ten_ge_demand) < 2:
+            return "Requires Port Augmentation"
+            
+        # If no rules failed, determine if there was any demand
+        if ge_demand > 0 or ten_ge_demand > 0:
+            return "With Headroom"
+        
+        # If no demand at all
+        return "No Port Demand"
+    # --- END OF UPDATED FUNCTION ---
 
     def get_loop_assessment(row):
         return "Requires Loop Upgrade" if row.get('Inv_MYCOM LOOP NORMAL UTILIZATION', 0) >= 0.7 else "With Headroom"
