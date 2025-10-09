@@ -59,9 +59,8 @@ def run_assessment_logic(df_nomination, df_inventory, df_sfp, choices={}):
         if col in df:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-    # --- THIS FUNCTION HAS BEEN UPDATED WITH MORE SPECIFIC SFP LOGIC ---
     def get_node_assessment(row):
-        # Initial checks for overrides or immediate failure
+        # This function now only returns the initial node status
         if row.get('Inv_25GE', 0) > 2:
             return "With Headroom"
         
@@ -75,44 +74,68 @@ def run_assessment_logic(df_nomination, df_inventory, df_sfp, choices={}):
             return "Requires Port Augmentation"
             
         if ge_demand > 0 or ten_ge_demand > 0:
-            # SFP Inventory Check
-            transport_ne = row.get('Inv_Transport NE')
-            if not transport_ne or df_sfp.empty:
-                # If we don't know the NE or have no SFP data, we can't check.
-                return "With Headroom"
-
-            # 1. Filter SFP inventory for the specific Transport NE
-            ne_sfp_inventory = df_sfp[df_sfp['EquipmentName'] == transport_ne]
-            
-            # 2. From that subset, find the available SFPs
-            available_sfp_in_ne = ne_sfp_inventory[ne_sfp_inventory['alias_status'] == r'\N'].copy()
-
-            if ge_demand > 0:
-                ge_patterns = ['1Gb', '1000M', '1200M', '1300M']
-                ge_sfp_df = available_sfp_in_ne[
-                    available_sfp_in_ne['Transceiver_Description'].str.startswith(tuple(ge_patterns)) &
-                    ~available_sfp_in_ne['Transceiver_Description'].str.contains('RJ45|Copper', case=False)
-                ]
-                return "With SFP Plugged" if not ge_sfp_df.empty else "No SFP Plugged"
-
-            if ten_ge_demand > 0:
-                ten_ge_patterns = ['10G', '10000M', '10300M', '11100M', '9800M', '9900M']
-                ten_ge_sfp_df = available_sfp_in_ne[
-                    available_sfp_in_ne['Transceiver_Description'].str.startswith(tuple(ten_ge_patterns))
-                ]
-                return "With SFP Plugged" if not ten_ge_sfp_df.empty else "No SFP Plugged"
+            return "With Headroom"
         
         return "No Port Demand"
-    # --- END OF UPDATED FUNCTION ---
 
     def get_loop_assessment(row):
         return "Requires Loop Upgrade" if row.get('Inv_MYCOM LOOP NORMAL UTILIZATION', 0) >= 0.7 else "With Headroom"
 
+    # --- NEW SFP CHECK FUNCTION ---
+    def check_sfp_availability(row):
+        # This function runs only if the initial assessment is "With Headroom"
+        if row['Node Assessment'] != 'With Headroom':
+            return (None, None) # Return None for both new columns
+            
+        transport_ne = row.get('Inv_Transport NE')
+        ge_demand = int(row.get('GE Port Demand', 0))
+        ten_ge_demand = int(row.get('10GE Port Demand', 0))
+
+        if not transport_ne or df_sfp.empty:
+            return (None, None)
+
+        ne_sfp_inventory = df_sfp[df_sfp['EquipmentName'] == transport_ne]
+        available_sfp_in_ne = ne_sfp_inventory[ne_sfp_inventory['alias_status'] == r'\N'].copy()
+
+        sfp_availability = "No SFP Plugged"
+        sfp_description = None
+
+        if ge_demand > 0:
+            ge_patterns = ['1Gb', '1000M', '1200M', '1300M']
+            ge_sfp_df = available_sfp_in_ne[
+                available_sfp_in_ne['Transceiver_Description'].str.startswith(tuple(ge_patterns)) &
+                ~available_sfp_in_ne['Transceiver_Description'].str.contains('RJ45|Copper', case=False)
+            ]
+            if len(ge_sfp_df) >= ge_demand:
+                sfp_availability = "With SFP Plugged"
+                sfp_details = ge_sfp_df.head(ge_demand)
+                sfp_description = "\n".join(sfp_details.apply(lambda r: f"{r['Port']}: {r['Transceiver_Description']}", axis=1))
+
+        if ten_ge_demand > 0:
+            ten_ge_patterns = ['10G', '10000M', '10300M', '11100M', '9800M', '9900M']
+            ten_ge_sfp_df = available_sfp_in_ne[
+                available_sfp_in_ne['Transceiver_Description'].str.startswith(tuple(ten_ge_patterns))
+            ]
+            if len(ten_ge_sfp_df) >= ten_ge_demand:
+                sfp_availability = "With SFP Plugged"
+                sfp_details = ten_ge_sfp_df.head(ten_ge_demand)
+                sfp_description = "\n".join(sfp_details.apply(lambda r: f"{r['Port']}: {r['Transceiver_Description']}", axis=1))
+                
+        return (sfp_availability, sfp_description)
+    # --- END OF SFP CHECK FUNCTION ---
+
+    # --- APPLY ALL ASSESSMENTS ---
     df['Node Assessment'] = df.apply(get_node_assessment, axis=1)
     df['Loop Assessment'] = df.apply(get_loop_assessment, axis=1)
+    
+    # Apply the SFP check and create the two new columns
+    sfp_results = df.apply(check_sfp_availability, axis=1)
+    df['SFP Availability'] = [res[0] for res in sfp_results]
+    df['SFP Port/Description'] = [res[1] for res in sfp_results]
+    
     return df
 
-# --- Data Loading (now loads SFP data as well) ---
+# --- Data Loading (runs once on startup) ---
 
 print("Loading master inventory data...")
 try:
@@ -126,8 +149,7 @@ try:
     
     worksheet_sfp = spreadsheet.worksheet("SFP_Inventory")
     df_sfp_inventory = pd.DataFrame(worksheet_sfp.get_all_records())
-    # Ensure key columns are strings for reliable matching
-    for col in ['EquipmentName', 'alias_status', 'Transceiver_Description']:
+    for col in ['EquipmentName', 'alias_status', 'Transceiver_Description', 'Port']:
         if col in df_sfp_inventory.columns:
             df_sfp_inventory[col] = df_sfp_inventory[col].astype(str)
 
